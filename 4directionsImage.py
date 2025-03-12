@@ -125,3 +125,77 @@ def retrieve_images_from_csv(
             }
 
     return results
+
+def get_nadir_and_four_directions(address_or_coords, csv_file):
+    """
+    1) parse_or_geocode -> (lat_query, lon_query).
+    2) retrieve images for pitch range [-90..-80] => near-nadir
+       pick best among them (closest to lat_query, lon_query).
+    3) retrieve images for pitch range [-45..-15], group by heading => pick single best from each of N/E/S/W.
+    4) return combined results.
+    """
+
+    # 1) parse user input
+    coords = parse_or_geocode(address_or_coords)
+    if not coords:
+        print(f"Could not parse or geocode: {address_or_coords}")
+        return None, None
+    lat_query, lon_query = coords
+
+    # 2) near-nadir => pitch [-90..-80]
+    nadir_candidates = retrieve_images_from_csv(
+        csv_path=csv_file,
+        query_coords=(lat_query, lon_query),
+        max_distance_km=2.0,
+        min_pitch=-90,
+        max_pitch=-80
+    )
+    best_nadir = None
+    if nadir_candidates:
+        # pick the physically closest to user's location
+        nadir_candidates.sort(key=lambda x: x["distance_km"] or 999999)
+        best_nadir = nadir_candidates[0]
+        best_nadir["classification"] = "Nadir"
+
+    # 3) oblique => pitch [-45..-15]
+    # ignoring "oblique" label, just collecting 4 directions
+    oblique_candidates = retrieve_images_from_csv(
+        csv_path=csv_file,
+        query_coords=(lat_query, lon_query),
+        max_distance_km=2.0,
+        min_pitch=-45,
+        max_pitch=-15
+    )
+
+    # group by heading
+    direction_buckets = {"N": [], "E": [], "S": [], "W": []}
+    for rec in oblique_candidates:
+        dir_label = heading_to_cardinal(rec["heading"])
+        direction_buckets[dir_label].append(rec)
+
+    four_dirs = {"N": None, "E": None, "S": None, "W": None}
+    # pick single nearest in each direction
+    for d in direction_buckets:
+        bucket = direction_buckets[d]
+        if not bucket:
+            continue
+        bucket.sort(key=lambda x: x["distance_km"] or 999999)
+        # pick best
+        best_rec = bucket[0]
+        best_rec["classification"] = d
+        four_dirs[d] = best_rec
+
+    return best_nadir, four_dirs
+
+
+address_input = "46.83000, -71.28500"  # numeric lat/lon
+csv_file = "NE-metadata-sample.csv"
+
+nadir_img, four_dirs = get_nadir_and_four_directions(address_input, csv_file)
+
+print("----- NEAR NADIR -----")
+print(nadir_img)
+
+print("\n----- FOUR DIRECTIONS -----")
+for d, img in four_dirs.items():
+    print(f"{d}: {img}")
